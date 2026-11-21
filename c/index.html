@@ -231,6 +231,9 @@
     location.href = URL.createObjectURL(file);
   });
   $("open").addEventListener("click", tryApp);
+  // Safari keeps the page when only the #fragment changes (a second code scanned into the
+  // same tab), so reload to show the new contact instead of the previous one.
+  window.addEventListener("hashchange", () => location.reload());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && vcard) setTimeout(showFallback, 300);
   });
