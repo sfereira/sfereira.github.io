@@ -118,29 +118,33 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const token = location.hash.slice(1);
-  // The whole fragment is passed on, so CardVault also receives the card photo reference.
-  const appURL = "cardvault://import#" + token;
-  const [contactToken, photoPart] = token.split("~");
-  // Card-photo relay (Cloudflare Worker). Set after deployment; a local server is used only
-  // when this page itself is served from 127.0.0.1 for testing.
+  // Card-photo relay (Cloudflare Worker). A local server is used only when this page itself
+  // is served from 127.0.0.1 for testing.
   const PRODUCTION_API = "https://cardvault-share.cardvault-share.workers.dev";
   const PHOTO_API = location.hostname === "127.0.0.1"
     ? (new URLSearchParams(location.search).get("api") || "") : PRODUCTION_API;
-  let vcard = "";
-  let name = "Contact";
 
-  function fail(message) { $("status").textContent = message; $("actions").hidden = true; }
+  // Everything about the contact currently shown. A new link (a second code opened in the same
+  // tab, or Safari restoring the page) replaces it in place, without reloading the page.
+  let current = { token: null, appURL: "", vcard: "", name: "Contact" };
+  let generation = 0;
+  let photoRequest = null;   // AbortController for the photo download in flight
+  let fallbackTimer = 0;
+  let photoURL = null;       // object URL of the decrypted photo, revoked on change
 
   async function decode(value) {
     if (!/^1\.[A-Za-z0-9_-]+$/.test(value) || value.length > 4096) throw new Error("format");
-    let b64 = value.slice(2).replace(/-/g, "+").replace(/_/g, "/");
-    b64 += "=".repeat((4 - b64.length % 4) % 4);
-    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bytes = fromBase64URL(value.slice(2));
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
     const text = await new Response(stream).text();
     if (!/^BEGIN:VCARD/i.test(text.trim()) || text.length > 16384) throw new Error("content");
     return text;
+  }
+
+  function fromBase64URL(value) {
+    let b64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - b64.length % 4) % 4);
+    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   }
 
   // Minimal vCard 3.0 reading for display only; the file itself is passed on unchanged.
@@ -179,10 +183,29 @@
     $("rows").append(li);
   }
 
+  // Clears the previous contact, its photo and any work still running for it.
+  function reset() {
+    photoRequest?.abort();
+    photoRequest = null;
+    clearTimeout(fallbackTimer);
+    if (photoURL) { URL.revokeObjectURL(photoURL); photoURL = null; }
+    document.querySelector(".biz-photo")?.remove();
+    $("biz").hidden = false;
+    $("bizContact").replaceChildren();
+    $("rows").replaceChildren();
+    $("photoNote").hidden = true;
+    $("cardGroup").hidden = true;
+    $("aboutGroup").hidden = true;
+    $("actions").hidden = true;
+    $("status").textContent = "Opening CardVault…";
+    document.title = "Contact · CardVault";
+    window.scrollTo(0, 0);
+  }
+
   function render(vcardText) {
     const f = fields(vcardText);
     const first = (k) => (f[k] && f[k][0]) || "";
-    name = first("FN") || "Contact";
+    const name = first("FN") || "Contact";
     const title = first("TITLE"), org = first("ORG").replace(/;+$/, "");
     const email = first("EMAIL"), phone = first("TEL");
     const site = (f.URL || [])[0] || "";
@@ -210,72 +233,98 @@
     $("cardGroup").hidden = false;
     $("aboutGroup").hidden = false;
     document.title = name + " · CardVault";
-  }
-
-  function showFallback() {
-    if (document.hidden) return;
-    $("status").textContent = "Save this contact to your phone.";
-    $("actions").hidden = false;
-  }
-
-  function tryApp() {
-    $("status").textContent = "Opening CardVault…";
-    // When CardVault is installed iOS offers to open it and this page goes to the background.
-    // Otherwise nothing opens, and the Contacts fallback appears.
-    location.href = appURL;
-    setTimeout(showFallback, 1600);
-  }
-
-  $("save").addEventListener("click", () => {
-    const file = new File([vcard], name.replace(/[\/\\:?%*|"<>]/g, "") + ".vcf", { type: "text/vcard" });
-    location.href = URL.createObjectURL(file);
-  });
-  $("open").addEventListener("click", tryApp);
-  // Safari keeps the page when only the #fragment changes (a second code scanned into the
-  // same tab), so reload to show the new contact instead of the previous one.
-  window.addEventListener("hashchange", () => location.reload());
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && vcard) setTimeout(showFallback, 300);
-  });
-
-  function fromBase64URL(value) {
-    let b64 = value.replace(/-/g, "+").replace(/_/g, "/");
-    b64 += "=".repeat((4 - b64.length % 4) % 4);
-    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    return name;
   }
 
   // Downloads the encrypted photo and decrypts it here with the key from the fragment.
-  async function showCardPhoto() {
+  async function showCardPhoto(photoPart, run) {
     const match = /^([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/.exec(photoPart || "");
     if (!match || !PHOTO_API) return;
-    const note = $("photoNote");
+    const request = new AbortController();
+    photoRequest = request;
     try {
-      const response = await fetch(`${PHOTO_API}/v1/cards/${match[1]}`, { cache: "no-store", referrerPolicy: "no-referrer" });
+      const response = await fetch(`${PHOTO_API}/v1/cards/${match[1]}`,
+        { cache: "no-store", referrerPolicy: "no-referrer", signal: request.signal });
       if (response.status === 404) throw new Error("expired");
       if (!response.ok) throw new Error("unavailable");
       const sealed = new Uint8Array(await response.arrayBuffer());
       const key = await crypto.subtle.importKey("raw", fromBase64URL(match[2]), "AES-GCM", false, ["decrypt"]);
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.slice(0, 12) }, key, sealed.slice(12));
+      if (run !== generation) return;                 // a newer link replaced this contact
+      const url = URL.createObjectURL(new Blob([plain], { type: "image/jpeg" }));
       const img = new Image();
       img.className = "biz-photo";
-      img.alt = "Business card photo for " + name;
-      img.src = URL.createObjectURL(new Blob([plain], { type: "image/jpeg" }));
+      img.alt = "Business card photo for " + current.name;
+      img.src = url;
       await img.decode();
-      $("biz").replaceWith(img);
+      if (run !== generation) { URL.revokeObjectURL(url); return; }
+      photoURL = url;
+      $("biz").hidden = true;
+      $("biz").after(img);
     } catch (error) {
-      note.textContent = error.message === "expired"
+      if (run !== generation || error.name === "AbortError") return;
+      $("photoNote").textContent = error.message === "expired"
         ? "The card photo has expired. The contact details are still here."
         : "The card photo couldn’t be loaded. The contact details are still here.";
-      note.hidden = false;
+      $("photoNote").hidden = false;
     }
   }
 
-  decode(contactToken).then((value) => {
-    vcard = value;
-    render(value);
-    showCardPhoto();
-    tryApp();
-  }).catch(() => fail("This contact link is incomplete. Ask for the QR code again."));
+  function showFallback() {
+    if (document.hidden || !current.vcard) return;
+    $("status").textContent = "Save this contact to your phone.";
+    $("actions").hidden = false;
+  }
+
+  function tryApp() {
+    if (!current.appURL) return;
+    $("status").textContent = "Opening CardVault…";
+    // When CardVault is installed iOS offers to open it and this page goes to the background.
+    // Otherwise nothing opens, and the Contacts fallback appears.
+    location.href = current.appURL;
+    clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(showFallback, 1600);
+  }
+
+  // Shows whatever contact the address now carries. Safe to call repeatedly.
+  async function load() {
+    const token = location.hash.slice(1);
+    if (token === current.token) return;
+    const run = ++generation;
+    reset();
+    // The whole fragment is passed on, so CardVault also receives the card photo reference.
+    current = { token, appURL: "cardvault://import#" + token, vcard: "", name: "Contact" };
+    const [contactToken, photoPart] = token.split("~");
+    try {
+      const vcard = await decode(contactToken);
+      if (run !== generation) return;
+      current.vcard = vcard;
+      current.name = render(vcard);
+      showCardPhoto(photoPart, run);
+      tryApp();
+    } catch {
+      if (run !== generation) return;
+      $("status").textContent = "This contact link is incomplete. Ask for the QR code again.";
+    }
+  }
+
+  $("save").addEventListener("click", () => {
+    if (!current.vcard) return;
+    const file = new File([current.vcard], current.name.replace(/[\/\\:?%*|"<>]/g, "") + ".vcf", { type: "text/vcard" });
+    location.href = URL.createObjectURL(file);
+  });
+  $("open").addEventListener("click", tryApp);
+  // A second code opened in the same tab changes only the #fragment, and Safari may restore
+  // this page from its back/forward cache: both show the new contact in place.
+  window.addEventListener("hashchange", load);
+  window.addEventListener("pageshow", (event) => { if (event.persisted) load(); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (location.hash.slice(1) !== current.token) { load(); return; }
+    if (current.vcard) { clearTimeout(fallbackTimer); fallbackTimer = setTimeout(showFallback, 300); }
+  });
+
+  load();
 })();
 </script>
 </body>
