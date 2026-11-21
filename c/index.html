@@ -9,9 +9,10 @@
 <title>Contact · CardVault</title>
 <!--
   The contact lives only in the URL fragment (#...), which browsers never send to the server.
-  It is a raw-DEFLATE, base64url vCard made by CardVault. No network requests, cookies or storage.
-  The card photo never leaves the sharer's phone, so the card is drawn from the shared details
-  using CardVault's card styling (VaultTheme / BusinessCardSidesView).
+  It is a raw-DEFLATE, base64url vCard made by CardVault. No cookies, storage or analytics.
+  When the sender included the card photo, it is fetched encrypted from the CardVault relay and
+  decrypted here with the key in the fragment; otherwise the card is drawn from the shared
+  details using CardVault's card styling (VaultTheme / BusinessCardSidesView).
 -->
 <style>
   :root {
@@ -120,9 +121,10 @@
   const $ = (id) => document.getElementById(id);
   // Card-photo relay (Cloudflare Worker). A local server is used only when this page itself
   // is served from 127.0.0.1 for testing.
-  const PRODUCTION_API = "https://cardvault-share.cardvault-share.workers.dev";
+  const RELAY = "https://cardvault-share.cardvault-share.workers.dev";
   const PHOTO_API = location.hostname === "127.0.0.1"
-    ? (new URLSearchParams(location.search).get("api") || "") : PRODUCTION_API;
+    ? (new URLSearchParams(location.search).get("api") || "")
+    : (location.origin === RELAY ? location.origin : RELAY);
 
   // Everything about the contact currently shown. A new link (a second code opened in the same
   // tab, or Safari restoring the page) replaces it in place, without reloading the page.
