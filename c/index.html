@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://cardvault-share.cardvault-share.workers.dev http://127.0.0.1:8788; base-uri 'none'; form-action 'none'">
 <title>Contact · CardVault</title>
 <!--
   The contact lives only in the URL fragment (#...), which browsers never send to the server.
@@ -65,6 +65,13 @@
               display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
   .biz-name + .biz-line { margin-top: 2.2cqw !important; }
   .biz-contact .biz-line { font-size: 4cqw; }
+  /* The sender's real card photo replaces the drawn face once it has been decrypted. */
+  .biz-photo { display: block; width: 100%; height: auto; border-radius: 10px;
+               box-shadow: 0 0 0 0.7px rgba(0, 0, 0, 0.12), 0 5px 14px rgba(0, 0, 0, 0.10);
+               background: #fff; animation: appear 0.25s ease-out; }
+  @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .biz-photo { animation: none; } }
+  .photo-note { margin: 12px 4px 0; font-size: 13px; color: var(--muted); }
 
   /* About rows, matching the app's label-over-value list. */
   .rows { margin: 0; padding: 0; list-style: none; }
@@ -95,6 +102,7 @@
       </div>
       <div class="biz-contact" id="bizContact" aria-hidden="true"></div>
     </div>
+    <p class="photo-note" id="photoNote" hidden></p>
   </section>
   <!-- The one action stays directly under the card, above the fold on small phones. -->
   <div id="actions" hidden>
@@ -111,7 +119,14 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const token = location.hash.slice(1);
+  // The whole fragment is passed on, so CardVault also receives the card photo reference.
   const appURL = "cardvault://import#" + token;
+  const [contactToken, photoPart] = token.split("~");
+  // Card-photo relay (Cloudflare Worker). Set after deployment; a local server is used only
+  // when this page itself is served from 127.0.0.1 for testing.
+  const PRODUCTION_API = "https://cardvault-share.cardvault-share.workers.dev";
+  const PHOTO_API = location.hostname === "127.0.0.1"
+    ? (new URLSearchParams(location.search).get("api") || "") : PRODUCTION_API;
   let vcard = "";
   let name = "Contact";
 
@@ -220,9 +235,42 @@
     if (!document.hidden && vcard) setTimeout(showFallback, 300);
   });
 
-  decode(token).then((value) => {
+  function fromBase64URL(value) {
+    let b64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    b64 += "=".repeat((4 - b64.length % 4) % 4);
+    return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  }
+
+  // Downloads the encrypted photo and decrypts it here with the key from the fragment.
+  async function showCardPhoto() {
+    const match = /^([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/.exec(photoPart || "");
+    if (!match || !PHOTO_API) return;
+    const note = $("photoNote");
+    try {
+      const response = await fetch(`${PHOTO_API}/v1/cards/${match[1]}`, { cache: "no-store", referrerPolicy: "no-referrer" });
+      if (response.status === 404) throw new Error("expired");
+      if (!response.ok) throw new Error("unavailable");
+      const sealed = new Uint8Array(await response.arrayBuffer());
+      const key = await crypto.subtle.importKey("raw", fromBase64URL(match[2]), "AES-GCM", false, ["decrypt"]);
+      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.slice(0, 12) }, key, sealed.slice(12));
+      const img = new Image();
+      img.className = "biz-photo";
+      img.alt = "Business card photo for " + name;
+      img.src = URL.createObjectURL(new Blob([plain], { type: "image/jpeg" }));
+      await img.decode();
+      $("biz").replaceWith(img);
+    } catch (error) {
+      note.textContent = error.message === "expired"
+        ? "The card photo has expired. The contact details are still here."
+        : "The card photo couldn’t be loaded. The contact details are still here.";
+      note.hidden = false;
+    }
+  }
+
+  decode(contactToken).then((value) => {
     vcard = value;
     render(value);
+    showCardPhoto();
     tryApp();
   }).catch(() => fail("This contact link is incomplete. Ask for the QR code again."));
 })();
