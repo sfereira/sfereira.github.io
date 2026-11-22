@@ -73,6 +73,7 @@
   @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) { .biz-photo { animation: none; } }
   .photo-note { margin: 12px 4px 0; font-size: 13px; color: var(--muted); }
+  .photo-note a { color: var(--muted); }
 
   /* About rows, matching the app's label-over-value list. */
   .rows { margin: 0; padding: 0; list-style: none; }
@@ -104,6 +105,7 @@
       <div class="biz-contact" id="bizContact" aria-hidden="true"></div>
     </div>
     <p class="photo-note" id="photoNote" hidden></p>
+    <p class="photo-note" id="photoReport" hidden><a id="reportLink" href="#">Report this photo</a></p>
   </section>
   <!-- The one action stays directly under the card, above the fold on small phones. -->
   <div id="actions" hidden>
@@ -130,6 +132,7 @@
   // tab, or Safari restoring the page) replaces it in place, without reloading the page.
   let current = { token: null, appURL: "", vcard: "", name: "Contact" };
   let generation = 0;
+  const REPORT_ADDRESS = "sheldon@materiumtech.com";
   let photoRequest = null;   // AbortController for the photo download in flight
   let fallbackTimer = 0;
   let photoURL = null;       // object URL of the decrypted photo, revoked on change
@@ -196,6 +199,7 @@
     $("bizContact").replaceChildren();
     $("rows").replaceChildren();
     $("photoNote").hidden = true;
+    $("photoReport").hidden = true;
     $("cardGroup").hidden = true;
     $("aboutGroup").hidden = true;
     $("actions").hidden = true;
@@ -263,6 +267,10 @@
       photoURL = url;
       $("biz").hidden = true;
       $("biz").after(img);
+      // Only the photo ID goes in the report, never the key: the photo can be deleted unseen.
+      $("reportLink").href = "mailto:" + REPORT_ADDRESS + "?subject=" + encodeURIComponent("Report shared card photo")
+        + "&body=" + encodeURIComponent("Photo ID: " + match[1] + "\nReason: ");
+      $("photoReport").hidden = false;
     } catch (error) {
       if (run !== generation || error.name === "AbortError") return;
       $("photoNote").textContent = error.message === "expired"
