@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src https://cardvault-share.cardvault-share.workers.dev http://127.0.0.1:8788; base-uri 'none'; form-action 'none'">
-<title>Contact · CardVault</title>
+<title>Contact · Founder CardVault</title>
 <!--
   The contact lives only in the URL fragment (#...), which browsers never send to the server.
   It is a raw-DEFLATE, base64url vCard made by CardVault. No cookies, storage or analytics.
@@ -93,7 +93,7 @@
 </head>
 <body>
 <main>
-  <p class="status" id="status" role="status" aria-live="polite">Opening CardVault…</p>
+  <p class="status" id="status" role="status" aria-live="polite">Opening Founder CardVault…</p>
   <section class="group" id="cardGroup" hidden>
     <div class="biz" id="biz" role="img">
       <div aria-hidden="true">
@@ -108,13 +108,13 @@
   <!-- The one action stays directly under the card, above the fold on small phones. -->
   <div id="actions" hidden>
     <button class="primary" id="save" type="button">Add to Contacts</button>
-    <button class="link" id="open" type="button">Open in CardVault</button>
+    <button class="link" id="open" type="button">Open in Founder CardVault</button>
   </div>
   <section id="aboutGroup" hidden>
     <h2 class="hdr">About</h2>
     <div class="group"><ul class="rows" id="rows"></ul></div>
   </section>
-  <p class="foot">Shared with CardVault. Contact details stay on this device.</p>
+  <p class="foot">Shared with Founder CardVault. Contact details stay on this device.</p>
 </main>
 <script>
 (() => {
@@ -199,8 +199,8 @@
     $("cardGroup").hidden = true;
     $("aboutGroup").hidden = true;
     $("actions").hidden = true;
-    $("status").textContent = "Opening CardVault…";
-    document.title = "Contact · CardVault";
+    $("status").textContent = "Opening Founder CardVault…";
+    document.title = "Contact · Founder CardVault";
     window.scrollTo(0, 0);
   }
 
@@ -234,7 +234,7 @@
 
     $("cardGroup").hidden = false;
     $("aboutGroup").hidden = false;
-    document.title = name + " · CardVault";
+    document.title = name + " · Founder CardVault";
     return name;
   }
 
@@ -280,7 +280,7 @@
 
   function tryApp() {
     if (!current.appURL) return;
-    $("status").textContent = "Opening CardVault…";
+    $("status").textContent = "Opening Founder CardVault…";
     // When CardVault is installed iOS offers to open it and this page goes to the background.
     // Otherwise nothing opens, and the Contacts fallback appears.
     location.href = current.appURL;
